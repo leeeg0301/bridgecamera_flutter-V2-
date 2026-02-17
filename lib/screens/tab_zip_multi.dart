@@ -7,6 +7,7 @@ import '../models/photo_item.dart';
 import '../models/saved_photo.dart';
 import '../services/manifest_service.dart';
 import '../services/zip_service.dart';
+import '../services/logger_service.dart';
 
 class TabZipMulti extends StatefulWidget {
   const TabZipMulti({super.key});
@@ -44,7 +45,6 @@ class _TabZipMultiState extends State<TabZipMulti> {
     await _reload();
   }
 
-  // ✅ [추가] 전체 결과 초기화 다이얼로그 + 실행
   Future<void> _confirmAndClearAll() async {
     if (working) return;
 
@@ -54,7 +54,7 @@ class _TabZipMultiState extends State<TabZipMulti> {
       builder: (_) => AlertDialog(
         title: const Text('전체 결과 초기화'),
         content: const Text(
-          '저장된 사진(갤러리) + ZIP(Downloads) + 목록이 모두 삭제됩니다.\n'
+          '저장된 사진(갤러리 전용폴더) + ZIP(Downloads) + 목록이 모두 삭제됩니다.\n'
           '이 작업은 되돌릴 수 없습니다.\n\n'
           '정말 초기화할까요?',
         ),
@@ -82,16 +82,14 @@ class _TabZipMultiState extends State<TabZipMulti> {
     try {
       await manifest.clearAllResults(deletePhotos: true, deleteZips: true);
       await _reload();
-
       if (!mounted) return;
-      setState(() {
-        lastZipPath = null;
-      });
+      setState(() => lastZipPath = null);
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('전체 결과 초기화 완료')),
       );
-    } catch (e) {
+    } catch (e, st) {
+      await LoggerService.I.e('전체 초기화 실패(2P)', error: e, st: st);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('초기화 실패: $e')),
@@ -137,6 +135,12 @@ class _TabZipMultiState extends State<TabZipMulti> {
           SnackBar(content: Text('ZIP 생성 완료: ${p.basename(zipPath)}')),
         );
       }
+    } catch (e, st) {
+      await LoggerService.I.e('ZIP 생성 실패', error: e, st: st);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ZIP 생성 실패: $e')),
+      );
     } finally {
       if (mounted) setState(() => working = false);
     }
@@ -145,7 +149,8 @@ class _TabZipMultiState extends State<TabZipMulti> {
   @override
   Widget build(BuildContext context) {
     final selectedCount = items.where((e) => e.selected).length;
-    final progressValue = (progressTotal == 0) ? null : (progressDone / progressTotal);
+    final progressValue =
+        (progressTotal == 0) ? null : (progressDone / progressTotal);
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -156,7 +161,6 @@ class _TabZipMultiState extends State<TabZipMulti> {
               Text('총 ${items.length} / 선택 $selectedCount'),
               const Spacer(),
               OutlinedButton(
-                // ✅ [변경] 기존 선택 초기화가 아니라 “전체 결과 초기화”
                 onPressed: working ? null : _confirmAndClearAll,
                 child: const Text('전체 초기화'),
               ),
@@ -180,17 +184,18 @@ class _TabZipMultiState extends State<TabZipMulti> {
           CheckboxListTile(
             value: makeFolders,
             onChanged: working ? null : (v) => setState(() => makeFolders = v ?? true),
-            title: const Text('폴더 분류'),
+            title: const Text('폴더 분류(교량/방향/위치)'),
           ),
 
           if (lastZipPath != null)
             Row(
               children: [
-                OutlinedButton(
+                OutlinedButton.icon(
                   onPressed: () async {
                     await Share.shareXFiles([XFile(lastZipPath!)]);
                   },
-                  child: const Text('공유'),
+                  icon: const Icon(Icons.share),
+                  label: const Text('공유'),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -213,6 +218,11 @@ class _TabZipMultiState extends State<TabZipMulti> {
                   value: it.selected,
                   onChanged: working ? null : (v) => _toggle(it.id, v ?? false),
                   title: Text(it.fileName),
+                  subtitle: Text(
+                    it.filePath,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 );
               },
             ),
