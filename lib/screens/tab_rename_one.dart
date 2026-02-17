@@ -7,7 +7,6 @@ import 'package:path/path.dart' as p;
 import '../services/manifest_service.dart';
 import '../services/sanitizer.dart';
 import '../services/bridge_service.dart';
-import '../services/logger_service.dart'; // ✅ [변경] 실패 로그
 
 class TabRenameOne extends StatefulWidget {
   const TabRenameOne({super.key});
@@ -23,34 +22,25 @@ class _TabRenameOneState extends State<TabRenameOne> {
 
   List<String> bridges = [];
 
+  // ✅ [변경] 교량은 Autocomplete + 직접입력용 컨트롤러 사용
+  final bridgeCtrl = TextEditingController();
+
   String bridge = '';
   String direction = '순천';
-  String location = 'A1';
+
+  // ✅ [변경] 위치를 "prefix + number"로 쪼갬
+  String locPrefix = 'A'; // A / P / S
+  int locNumber = 1;      // prefix에 따라 범위 다름
 
   final descCtrl = TextEditingController();
 
   bool saving = false;
   String lastSaved = '-';
 
-  // ✅ [변경] 저장 현황 표시용
-  int totalCount = 0;
-  int totalBytes = 0;
-
   @override
   void initState() {
     super.initState();
     _loadBridges();
-    _refreshStats(); // ✅ [변경]
-  }
-
-  Future<void> _refreshStats() async {
-    final c = await manifest.photoCount();
-    final b = await manifest.photosBytes();
-    if (!mounted) return;
-    setState(() {
-      totalCount = c;
-      totalBytes = b;
-    });
   }
 
   Future<void> _loadBridges() async {
@@ -61,6 +51,7 @@ class _TabRenameOneState extends State<TabRenameOne> {
       bridges = list;
       if (bridges.isNotEmpty) {
         bridge = bridges.first;
+        bridgeCtrl.text = bridge; // ✅ [추가] 초기값 표시
       }
     });
   }
@@ -68,20 +59,47 @@ class _TabRenameOneState extends State<TabRenameOne> {
   @override
   void dispose() {
     descCtrl.dispose();
+    bridgeCtrl.dispose(); // ✅ [추가]
     super.dispose();
   }
+
+  // ✅ [추가] prefix에 따라 번호 범위
+  List<int> _locNumbersForPrefix(String prefix) {
+    if (prefix == 'A') return [1, 2];
+    if (prefix == 'P') return List.generate(13, (i) => i + 1); // 1~13
+    return List.generate(15, (i) => i + 1); // S: 1~15
+  }
+
+  String get location => '$locPrefix$locNumber'; // ✅ [변경] 실제 location 문자열
 
   String _buildName(String ext) {
     return Sanitizer.buildFileName(
       bridge: bridge,
       direction: direction,
-      location: location,
+      location: location, // ✅ [변경]
       desc: descCtrl.text,
       ext: ext,
     );
   }
 
+  void _resetForm() {
+    // ✅ [추가] 1P 초기화 버튼 동작
+    setState(() {
+      bridge = bridges.isNotEmpty ? bridges.first : '';
+      bridgeCtrl.text = bridge;
+      direction = '순천';
+      locPrefix = 'A';
+      locNumber = 1;
+      descCtrl.clear();
+      lastSaved = '-';
+    });
+  }
+
   Future<void> _pickAndSave(ImageSource source) async {
+    // ✅ [변경] Autocomplete에서 직접 입력한 값 반영
+    final typed = bridgeCtrl.text.trim();
+    if (typed.isNotEmpty) bridge = typed;
+
     if (bridge.isEmpty) return;
 
     setState(() => saving = true);
@@ -96,15 +114,12 @@ class _TabRenameOneState extends State<TabRenameOne> {
       final saved = await manifest.savePhoto(src, name);
 
       if (!mounted) return;
-      setState(() => lastSaved = saved.fileName); // ✅ [변경] 실제 저장된 이름
-
-      await _refreshStats(); // ✅ [변경] 저장될 때마다 갱신
+      setState(() => lastSaved = saved.fileName);
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장 완료: ${saved.fileName}\n${saved.filePath}')),
+        SnackBar(content: Text('저장 완료: ${saved.fileName}')),
       );
-    } catch (e, st) {
-      await LoggerService.I.e('사진 저장 실패(UI)', error: e, st: st); // ✅ [변경]
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('저장 실패: $e')),
@@ -116,37 +131,78 @@ class _TabRenameOneState extends State<TabRenameOne> {
 
   @override
   Widget build(BuildContext context) {
-    final preview = bridge.isEmpty ? '-' : _buildName('jpg');
-    final mb = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+    final preview = bridgeCtrl.text.trim().isEmpty
+        ? '-'
+        : Sanitizer.buildFileName(
+            bridge: bridgeCtrl.text.trim(), // ✅ [변경] 입력중 미리보기 반영
+            direction: direction,
+            location: location,
+            desc: descCtrl.text,
+            ext: 'jpg',
+          );
+
+    final locNums = _locNumbersForPrefix(locPrefix);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: ListView(
         children: [
-          const Text(
-            '1페이지: 촬영/갤러리 → 파일명 적용 → 저장',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
-
-          // ✅ [변경] 저장 현황 표시
-          Text('저장된 사진: $totalCount개'),
-          Text('저장 용량(대략): $mb MB'),
-          const SizedBox(height: 12),
-
-          DropdownButtonFormField<String>(
-            value: bridge.isEmpty ? null : bridge,
-            items: bridges
-                .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                .toList(),
-            onChanged: saving ? null : (v) => setState(() => bridge = v ?? bridge),
-            decoration: const InputDecoration(
-              labelText: '교량',
-              border: OutlineInputBorder(),
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '1페이지: 촬영/갤러리 → 파일명 적용 → 저장',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              OutlinedButton(
+                onPressed: saving ? null : _resetForm, // ✅ [추가]
+                child: const Text('초기화'),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
 
+          // ✅ [변경] 교량: Autocomplete(검색+직접입력)
+          Autocomplete<String>(
+            optionsBuilder: (TextEditingValue v) {
+              final q = v.text.trim();
+              if (q.isEmpty) return const Iterable<String>.empty();
+              return bridges.where((b) => b.contains(q));
+            },
+            onSelected: (v) {
+              setState(() {
+                bridge = v;
+                bridgeCtrl.text = v;
+              });
+            },
+            fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+              // ✅ [주의] Autocomplete가 자체 컨트롤러를 넘겨주므로 bridgeCtrl과 동기화
+              textEditingController.text = bridgeCtrl.text;
+              textEditingController.selection = TextSelection.fromPosition(
+                TextPosition(offset: textEditingController.text.length),
+              );
+
+              textEditingController.addListener(() {
+                bridgeCtrl.text = textEditingController.text;
+              });
+
+              return TextFormField(
+                controller: textEditingController,
+                focusNode: focusNode,
+                enabled: !saving,
+                decoration: const InputDecoration(
+                  labelText: '교량(검색/직접입력)',
+                  border: OutlineInputBorder(),
+                ),
+                onFieldSubmitted: (_) => onFieldSubmitted(),
+              );
+            },
+          ),
+
+          const SizedBox(height: 12),
+
+          // 방향(기존 그대로)
           DropdownButtonFormField<String>(
             value: direction,
             items: const [
@@ -159,22 +215,56 @@ class _TabRenameOneState extends State<TabRenameOne> {
               border: OutlineInputBorder(),
             ),
           ),
+
           const SizedBox(height: 12),
 
-          DropdownButtonFormField<String>(
-            value: location,
-            items: const [
-              DropdownMenuItem(value: 'A1', child: Text('A1')),
-              DropdownMenuItem(value: 'A2', child: Text('A2')),
-              DropdownMenuItem(value: 'P1', child: Text('P1')),
-              DropdownMenuItem(value: 'S1', child: Text('S1')),
+          // ✅ [변경] 위치: prefix + number 방식
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: DropdownButtonFormField<String>(
+                  value: locPrefix,
+                  items: const [
+                    DropdownMenuItem(value: 'A', child: Text('A')),
+                    DropdownMenuItem(value: 'P', child: Text('P')),
+                    DropdownMenuItem(value: 'S', child: Text('S')),
+                  ],
+                  onChanged: saving
+                      ? null
+                      : (v) {
+                          final newPrefix = v ?? locPrefix;
+                          final newNums = _locNumbersForPrefix(newPrefix);
+                          setState(() {
+                            locPrefix = newPrefix;
+                            // ✅ prefix 바뀌면 번호가 범위를 벗어날 수 있으니 1로 리셋
+                            locNumber = newNums.first;
+                          });
+                        },
+                  decoration: const InputDecoration(
+                    labelText: '위치 구분',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 3,
+                child: DropdownButtonFormField<int>(
+                  value: locNums.contains(locNumber) ? locNumber : locNums.first,
+                  items: locNums
+                      .map((n) => DropdownMenuItem(value: n, child: Text('$n')))
+                      .toList(),
+                  onChanged: saving ? null : (v) => setState(() => locNumber = v ?? locNumber),
+                  decoration: const InputDecoration(
+                    labelText: '번호',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
             ],
-            onChanged: saving ? null : (v) => setState(() => location = v ?? location),
-            decoration: const InputDecoration(
-              labelText: '위치',
-              border: OutlineInputBorder(),
-            ),
           ),
+
           const SizedBox(height: 12),
 
           TextField(
