@@ -1,0 +1,26 @@
+name: bridge_camera_app
+description: 교량 점검 사진 관리 앱
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  image_picker: ^1.0.8
+  path_provider: ^2.1.2
+  archive: ^3.4.10
+  share_plus: ^7.2.1
+  uuid: ^4.2.1
+  path: ^1.9.0 # ✅ [변경] (tab_rename_one.dart에서 사용)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
