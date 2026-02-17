@@ -3,23 +3,21 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../models/saved_photo.dart';
-import 'logger_service.dart'; // ✅ [변경] 실패 로그 남기기
 
 class ManifestService {
   static const _manifest = 'saved_photos.json';
 
   Future<Directory> _baseDir() async => getApplicationDocumentsDirectory();
 
-  // ✅ [변경] 사진은 "갤러리에서 찾기 쉬운" Pictures 폴더에만 저장
+  // (네가 운영형으로 바꾼 기준 유지)
   Future<Directory> photosDir() async {
-    final d = Directory('/storage/emulated/0/Pictures');
+    final d = Directory('/storage/emulated/0/Pictures'); // 사진은 갤러리(Pictures)에만
     if (!await d.exists()) await d.create(recursive: true);
     return d;
   }
 
-  // ✅ [변경] ZIP은 Download/BridgeCameraApp/exports 폴더
   Future<Directory> zipsDir() async {
-    final d = Directory('/storage/emulated/0/Download/BridgeCameraApp/exports');
+    final d = Directory('/storage/emulated/0/Download/BridgeCameraApp/exports'); // zip은 downloads
     if (!await d.exists()) await d.create(recursive: true);
     return d;
   }
@@ -30,18 +28,12 @@ class ManifestService {
   Future<List<SavedPhoto>> loadAll() async {
     final f = await _manifestFile();
     if (!await f.exists()) return [];
-    try {
-      final raw = await f.readAsString();
-      final list = jsonDecode(raw) as List;
-      return list.map((e) => SavedPhoto.fromJson(e)).toList();
-    } catch (e, st) {
-      // ✅ [변경] json 깨짐 등도 로그로 남김
-      await LoggerService.I.e('manifest load 실패', error: e, st: st);
-      return [];
-    }
+    final raw = await f.readAsString();
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => SavedPhoto.fromJson(e)).toList();
   }
 
-  // ✅ [변경] atomic 저장(중간에 앱 꺼져도 json 깨질 확률 낮춤)
+  // ✅ atomic 저장 유지
   Future<void> _saveAll(List<SavedPhoto> items) async {
     final f = await _manifestFile();
     final tmp = File('${f.path}.tmp');
@@ -55,7 +47,6 @@ class ManifestService {
     await tmp.rename(f.path);
   }
 
-  // ✅ [변경] 동일 파일명 충돌 방지: -001, -002 자동 부여
   Future<String> _avoidCollisionName(Directory dir, String name) async {
     final ext = p.extension(name);
     final base = p.basenameWithoutExtension(name);
@@ -73,16 +64,9 @@ class ManifestService {
   Future<SavedPhoto> savePhoto(File src, String name) async {
     final dir = await photosDir();
 
-    // ✅ [변경] Pictures 폴더에 저장할 때도 이름 충돌 방지
     final safeName = await _avoidCollisionName(dir, name);
     final dst = File(p.join(dir.path, safeName));
-
-    try {
-      await src.copy(dst.path);
-    } catch (e, st) {
-      await LoggerService.I.e('사진 저장(copy) 실패', error: e, st: st);
-      rethrow;
-    }
+    await src.copy(dst.path);
 
     final now = DateTime.now().millisecondsSinceEpoch;
 
@@ -107,25 +91,41 @@ class ManifestService {
     await _saveAll(list);
   }
 
-  // ✅ [변경] 저장 현황 표시용(파일 많아지면 쌓이는지 확인)
-  Future<int> photoCount() async {
-    final list = await loadAll();
-    return list.length;
-  }
+  // ✅ [추가] 전체 결과 초기화 (사진 + manifest + zip 모두 정리)
+  Future<void> clearAllResults({
+    bool deletePhotos = true,
+    bool deleteZips = true,
+  }) async {
+    // 1) 사진 삭제( manifest 기준으로만 삭제 → Pictures 전체를 건드리지 않음 )
+    if (deletePhotos) {
+      final list = await loadAll();
+      for (final it in list) {
+        try {
+          final f = File(it.filePath);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+    }
 
-  // ✅ [변경] Pictures 폴더 전체가 아니라 "manifest에 기록된 파일"만 합산 (정확)
-  Future<int> photosBytes() async {
-    final list = await loadAll();
-    int sum = 0;
-    for (final it in list) {
+    // 2) zip 삭제 (exports 폴더 안 zip만)
+    if (deleteZips) {
       try {
-        final f = File(it.filePath);
-        if (await f.exists()) sum += await f.length();
+        final d = await zipsDir();
+        if (await d.exists()) {
+          await for (final e in d.list(recursive: false)) {
+            if (e is File && e.path.toLowerCase().endsWith('.zip')) {
+              try { await e.delete(); } catch (_) {}
+            }
+          }
+        }
       } catch (_) {}
     }
-    return sum;
+
+    // 3) manifest 초기화
+    await _saveAll([]);
   }
-    // ✅ [추가] 2P에서 "초기화" 버튼 누르면 전체 선택 상태를 한 번에 바꾸기 위해 추가
+
+  // ✅ [유지/필요] 2P에서 “선택 초기화” 같은 것 필요하면 사용
   Future<void> updateAllSelection(bool v) async {
     final list = await loadAll();
     for (final e in list) {
