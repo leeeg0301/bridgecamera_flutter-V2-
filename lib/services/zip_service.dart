@@ -11,7 +11,7 @@ class ZipService {
     required bool makeFolders,
     required Directory outDir,
     String? zipName,
-    void Function(int done, int total)? onProgress, // ✅ [추가] 진행률 콜백
+    void Function(int done, int total)? onProgress,
   }) async {
     final selected = items.where((e) => e.selected).toList();
     if (selected.isEmpty) {
@@ -35,8 +35,8 @@ class ZipService {
 
     for (final item in selected) {
       final f = File(item.path);
+
       if (!await f.exists()) {
-        // ✅ [추가] 파일이 없어도 진행률은 올라가게 처리(멈춘 것처럼 보이는 문제 방지)
         done++;
         onProgress?.call(done, total);
         continue;
@@ -54,7 +54,6 @@ class ZipService {
 
       encoder.addFile(f, arcName);
 
-      // ✅ [추가] 진행률 업데이트
       done++;
       onProgress?.call(done, total);
     }
