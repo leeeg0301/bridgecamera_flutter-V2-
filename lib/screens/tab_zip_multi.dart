@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
-import 'package:image_picker/image_picker.dart'; // ✅ XFile
+import 'package:image_picker/image_picker.dart';
 
 import '../models/photo_item.dart';
 import '../models/saved_photo.dart';
@@ -23,7 +23,6 @@ class _TabZipMultiState extends State<TabZipMulti> {
   bool makeFolders = true;
   bool working = false;
 
-  // ✅ [추가] 진행률 상태값
   int progressDone = 0;
   int progressTotal = 0;
 
@@ -45,16 +44,60 @@ class _TabZipMultiState extends State<TabZipMulti> {
     await _reload();
   }
 
-  Future<void> _resetSelections() async {
-    // ✅ [추가] 전체 선택 해제 + lastZipPath 초기화
-    await manifest.updateAllSelection(false);
-    await _reload();
-    if (mounted) {
+  // ✅ [추가] 전체 결과 초기화 다이얼로그 + 실행
+  Future<void> _confirmAndClearAll() async {
+    if (working) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('전체 결과 초기화'),
+        content: const Text(
+          '저장된 사진(갤러리) + ZIP(Downloads) + 목록이 모두 삭제됩니다.\n'
+          '이 작업은 되돌릴 수 없습니다.\n\n'
+          '정말 초기화할까요?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('초기화'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    setState(() {
+      working = true;
+      progressDone = 0;
+      progressTotal = 0;
+    });
+
+    try {
+      await manifest.clearAllResults(deletePhotos: true, deleteZips: true);
+      await _reload();
+
+      if (!mounted) return;
       setState(() {
         lastZipPath = null;
-        progressDone = 0;
-        progressTotal = 0;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('전체 결과 초기화 완료')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('초기화 실패: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => working = false);
     }
   }
 
@@ -65,18 +108,14 @@ class _TabZipMultiState extends State<TabZipMulti> {
     setState(() {
       working = true;
       progressDone = 0;
-      progressTotal = selected.length; // ✅ [추가] 총량 표시
+      progressTotal = selected.length;
     });
 
     try {
       final outDir = await manifest.zipsDir();
 
       final photoItems = selected
-          .map((e) => PhotoItem(
-                path: e.filePath,
-                name: e.fileName,
-                selected: true,
-              ))
+          .map((e) => PhotoItem(path: e.filePath, name: e.fileName, selected: true))
           .toList();
 
       final zipPath = await zipService.buildZip(
@@ -84,7 +123,6 @@ class _TabZipMultiState extends State<TabZipMulti> {
         makeFolders: makeFolders,
         outDir: outDir,
         onProgress: (done, total) {
-          // ✅ [추가] 진행률 업데이트(멈춘 느낌 해소)
           if (!mounted) return;
           setState(() {
             progressDone = done;
@@ -107,21 +145,20 @@ class _TabZipMultiState extends State<TabZipMulti> {
   @override
   Widget build(BuildContext context) {
     final selectedCount = items.where((e) => e.selected).length;
-    final progressValue =
-        (progressTotal == 0) ? null : (progressDone / progressTotal);
+    final progressValue = (progressTotal == 0) ? null : (progressDone / progressTotal);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          // ✅ [추가] 상단 버튼들(초기화)
           Row(
             children: [
               Text('총 ${items.length} / 선택 $selectedCount'),
               const Spacer(),
               OutlinedButton(
-                onPressed: working ? null : _resetSelections, // ✅ [추가]
-                child: const Text('초기화'),
+                // ✅ [변경] 기존 선택 초기화가 아니라 “전체 결과 초기화”
+                onPressed: working ? null : _confirmAndClearAll,
+                child: const Text('전체 초기화'),
               ),
               const SizedBox(width: 8),
               ElevatedButton(
@@ -131,8 +168,7 @@ class _TabZipMultiState extends State<TabZipMulti> {
             ],
           ),
 
-          // ✅ [추가] 진행률 표시(멈춘 느낌 해소)
-          if (working) ...[
+          if (working && progressTotal > 0) ...[
             const SizedBox(height: 10),
             LinearProgressIndicator(value: progressValue),
             const SizedBox(height: 6),
@@ -147,7 +183,6 @@ class _TabZipMultiState extends State<TabZipMulti> {
             title: const Text('폴더 분류'),
           ),
 
-          // 공유 버튼
           if (lastZipPath != null)
             Row(
               children: [
