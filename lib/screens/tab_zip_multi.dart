@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
-import 'package:image_picker/image_picker.dart'; // ✅ [변경] XFile
+import 'package:image_picker/image_picker.dart'; // ✅ XFile
 
 import '../models/photo_item.dart';
 import '../models/saved_photo.dart';
 import '../services/manifest_service.dart';
 import '../services/zip_service.dart';
-import '../services/logger_service.dart'; // ✅ [변경] 로그
 
 class TabZipMulti extends StatefulWidget {
   const TabZipMulti({super.key});
@@ -23,6 +22,10 @@ class _TabZipMultiState extends State<TabZipMulti> {
   List<SavedPhoto> items = [];
   bool makeFolders = true;
   bool working = false;
+
+  // ✅ [추가] 진행률 상태값
+  int progressDone = 0;
+  int progressTotal = 0;
 
   String? lastZipPath;
 
@@ -42,11 +45,28 @@ class _TabZipMultiState extends State<TabZipMulti> {
     await _reload();
   }
 
+  Future<void> _resetSelections() async {
+    // ✅ [추가] 전체 선택 해제 + lastZipPath 초기화
+    await manifest.updateAllSelection(false);
+    await _reload();
+    if (mounted) {
+      setState(() {
+        lastZipPath = null;
+        progressDone = 0;
+        progressTotal = 0;
+      });
+    }
+  }
+
   Future<void> _buildZip() async {
     final selected = items.where((e) => e.selected).toList();
     if (selected.isEmpty) return;
 
-    setState(() => working = true);
+    setState(() {
+      working = true;
+      progressDone = 0;
+      progressTotal = selected.length; // ✅ [추가] 총량 표시
+    });
 
     try {
       final outDir = await manifest.zipsDir();
@@ -63,20 +83,22 @@ class _TabZipMultiState extends State<TabZipMulti> {
         items: photoItems,
         makeFolders: makeFolders,
         outDir: outDir,
+        onProgress: (done, total) {
+          // ✅ [추가] 진행률 업데이트(멈춘 느낌 해소)
+          if (!mounted) return;
+          setState(() {
+            progressDone = done;
+            progressTotal = total;
+          });
+        },
       );
 
       if (mounted) {
         setState(() => lastZipPath = zipPath);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ZIP 생성 완료:\n$zipPath')),
+          SnackBar(content: Text('ZIP 생성 완료: ${p.basename(zipPath)}')),
         );
       }
-    } catch (e, st) {
-      await LoggerService.I.e('ZIP 생성 실패(UI)', error: e, st: st);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ZIP 생성 실패: $e')),
-      );
     } finally {
       if (mounted) setState(() => working = false);
     }
@@ -85,47 +107,23 @@ class _TabZipMultiState extends State<TabZipMulti> {
   @override
   Widget build(BuildContext context) {
     final selectedCount = items.where((e) => e.selected).length;
+    final progressValue =
+        (progressTotal == 0) ? null : (progressDone / progressTotal);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          // ✅ [변경] ZIP 저장 위치 안내(사용자가 찾기 쉬움)
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.black12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('ZIP 저장 위치', style: TextStyle(fontWeight: FontWeight.bold)),
-                SizedBox(height: 6),
-                Text(
-                  '/storage/emulated/0/Download/BridgeCameraApp/exports',
-                  style: TextStyle(fontSize: 12),
-                ),
-                SizedBox(height: 6),
-                Text(
-                  '오류 로그 위치: /storage/emulated/0/Download/BridgeCameraApp/logs',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          CheckboxListTile(
-            value: makeFolders,
-            onChanged: (v) => setState(() => makeFolders = v ?? true),
-            title: const Text('폴더 분류(교량/방향/위치)'),
-          ),
-
+          // ✅ [추가] 상단 버튼들(초기화)
           Row(
             children: [
               Text('총 ${items.length} / 선택 $selectedCount'),
               const Spacer(),
+              OutlinedButton(
+                onPressed: working ? null : _resetSelections, // ✅ [추가]
+                child: const Text('초기화'),
+              ),
+              const SizedBox(width: 8),
               ElevatedButton(
                 onPressed: (working || selectedCount == 0) ? null : _buildZip,
                 child: const Text('ZIP 생성'),
@@ -133,17 +131,33 @@ class _TabZipMultiState extends State<TabZipMulti> {
             ],
           ),
 
+          // ✅ [추가] 진행률 표시(멈춘 느낌 해소)
+          if (working) ...[
+            const SizedBox(height: 10),
+            LinearProgressIndicator(value: progressValue),
+            const SizedBox(height: 6),
+            Text('ZIP 생성 중... ($progressDone / $progressTotal)'),
+          ],
+
+          const SizedBox(height: 8),
+
+          CheckboxListTile(
+            value: makeFolders,
+            onChanged: working ? null : (v) => setState(() => makeFolders = v ?? true),
+            title: const Text('폴더 분류'),
+          ),
+
+          // 공유 버튼
           if (lastZipPath != null)
             Row(
               children: [
-                OutlinedButton.icon(
+                OutlinedButton(
                   onPressed: () async {
                     await Share.shareXFiles([XFile(lastZipPath!)]);
                   },
-                  icon: const Icon(Icons.share),
-                  label: const Text('공유'),
+                  child: const Text('공유'),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     p.basename(lastZipPath!),
@@ -154,6 +168,7 @@ class _TabZipMultiState extends State<TabZipMulti> {
             ),
 
           const Divider(),
+
           Expanded(
             child: ListView.builder(
               itemCount: items.length,
@@ -161,13 +176,8 @@ class _TabZipMultiState extends State<TabZipMulti> {
                 final it = items[i];
                 return CheckboxListTile(
                   value: it.selected,
-                  onChanged: (v) => _toggle(it.id, v ?? false),
+                  onChanged: working ? null : (v) => _toggle(it.id, v ?? false),
                   title: Text(it.fileName),
-                  subtitle: Text(
-                    it.filePath,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
                 );
               },
             ),
