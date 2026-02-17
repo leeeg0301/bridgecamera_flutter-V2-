@@ -125,4 +125,12 @@ class ManifestService {
     }
     return sum;
   }
+    // ✅ [추가] 2P에서 "초기화" 버튼 누르면 전체 선택 상태를 한 번에 바꾸기 위해 추가
+  Future<void> updateAllSelection(bool v) async {
+    final list = await loadAll();
+    for (final e in list) {
+      e.selected = v;
+    }
+    await _saveAll(list);
+  }
 }
